@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b0d10" />
+    <meta name="description" content="TW K Radar 台股 K 線、即時行情、技術指標、AI 趨勢與回放工具。" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="stylesheet" href="styles.css" />
+    <title>TW K Radar</title>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <button id="menuButton" class="brand-mark menu-button" type="button" title="開啟選單">☰</button>
+        <div class="brand-lockup">
+          <div>
+            <div class="brand-name">TW K Radar</div>
+            <div class="brand-subtitle">台股即時判讀工作台</div>
+          </div>
+        </div>
+        <div class="top-status">
+          <div id="dataMode" class="status-chip">連線中</div>
+          <div id="sessionClock" class="market-clock">TPE</div>
+          <div id="selectedTicker" class="ticker-pill">2330 台積電</div>
+        </div>
+      </header>
+
+      <aside id="drawer" class="drawer" aria-hidden="true"></aside>
+      <main id="view" class="view"></main>
+
+      <nav class="bottom-nav" aria-label="主要分頁">
+        <button class="nav-item is-active" data-page="home" type="button"><span class="nav-icon">⌂</span><span>首頁</span></button>
+        <button class="nav-item" data-page="watchlist" type="button"><span class="nav-icon">★</span><span>自選</span></button>
+        <button class="nav-item" data-page="chart" type="button"><span class="nav-icon">⌁</span><span>K線</span></button>
+        <button class="nav-item" data-page="indicators" type="button"><span class="nav-icon">ƒ</span><span>指標</span></button>
+        <button class="nav-item" data-page="settings" type="button"><span class="nav-icon">⚙</span><span>設定</span></button>
+      </nav>
+    </div>
+
+    <script src="data/quotes.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
