@@ -1,0 +1,9 @@
+node_modules/
+android/
+dist/
+.gradle/
+*.apk
+*.aab
+.DS_Store
+Thumbs.db
+codex_write_test.txt

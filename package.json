@@ -1,0 +1,18 @@
+{
+  "name": "tw-k-radar",
+  "version": "0.1.0",
+  "private": true,
+  "description": "台股 K 線、指標、畫線、AI 趨勢與回放的網頁 App MVP。",
+  "scripts": {
+    "android:add": "npx cap add android",
+    "android:sync": "npx cap sync android",
+    "android:debug": "npx cap sync android && cd android && ./gradlew assembleDebug"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.4.3",
+    "@capacitor/core": "^7.4.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.4.3"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "appId": "app.twkradar.mobile",
+  "appName": "TW K Radar",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  }
+}
