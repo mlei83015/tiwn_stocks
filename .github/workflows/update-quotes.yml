@@ -1,0 +1,55 @@
+name: Update Quote Cache
+
+on:
+  schedule:
+    - cron: "*/5 1-6 * * 1-5"
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Deploy Web App"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: quote-cache
+  cancel-in-progress: true
+
+jobs:
+  update:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          path: source
+
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: pages
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build quote cache
+        run: node source/scripts/update-quotes.mjs pages/data/quotes.json pages/data/quotes.js
+
+      - name: Publish quote cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/quotes.json data/quotes.js
+          if git diff --cached --quiet; then
+            echo "Quote cache unchanged"
+          else
+            git commit -m "Update quote cache"
+            git push origin gh-pages
+          fi

@@ -31,8 +31,9 @@
 - K 線：Yahoo Finance chart API，例如 `2330.TW`、`5483.TWO`
 - 最新價校正：TWSE MIS，例如 `tse_2330.tw`、`otc_5483.tw`
 - 股票清單：TWSE OpenAPI、TPEX OpenAPI
+- 網站備援：`www/data/quotes.js` 與 `www/data/quotes.json`，固定使用台幣 TWD 報價
 
-如果公開資料源被 CORS、流量限制或暫時封鎖，畫面會明確顯示「離線示範資料，不是真實行情」。
+如果公開資料源被 CORS、流量限制或暫時封鎖，畫面會改用同網域的台幣報價快取。沒有真實報價時，不會再顯示隨機示範價格。
 
 ## 開啟網站
 

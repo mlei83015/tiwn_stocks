@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const APP_VERSION = "2026.06.29-desk";
+  const APP_VERSION = "2026.06.29-twd-quotes";
   const STORAGE_KEY = "tw-k-radar-state-v3";
   const ACCOUNT_KEY = "tw-k-radar-accounts-v1";
   const SESSION_KEY = "tw-k-radar-session-v1";
@@ -162,6 +162,8 @@
     market: exchange === "TPEX" ? "上櫃" : "上市"
   }));
   const dataStore = new Map();
+  const quoteCache = new Map();
+  let quoteCacheMeta = null;
   let chartRuntime = null;
   let refreshTimer = null;
   let replayTimer = null;
@@ -182,6 +184,8 @@
     }, 120));
     updateClock();
     setInterval(updateClock, 1000);
+    ingestQuoteBundle(globalThis.TW_K_RADAR_QUOTES);
+    await loadQuoteCache();
     refreshUniverse();
 
     if (!state.user) {
@@ -1070,6 +1074,7 @@
     const cached = dataStore.get(symbol);
     if (!options.force && cached && !isStale(cached.updatedAt, 30_000)) return cached;
     const info = symbolInfo(symbol);
+    const cachedQuote = cachedQuoteFor(symbol);
     const previous = cached || { symbol, info, candles: [], quote: null };
     dataStore.set(symbol, { ...previous, source: "讀取中", updatedAt: Date.now() });
 
@@ -1080,50 +1085,65 @@
       ]);
       const chartValue = chart.status === "fulfilled" ? chart.value : null;
       const quoteValue = mis.status === "fulfilled" ? mis.value : null;
-      if (!chartValue?.candles?.length && !quoteValue?.price) throw new Error("no live data");
+      const quoteSource = quoteValue?.price ? quoteValue : cachedQuote?.price ? cachedQuote : null;
+      if (!chartValue?.candles?.length && !quoteSource?.price) throw new Error("no live data");
 
-      const candles = chartValue?.candles?.length ? chartValue.candles : fallbackCandles(symbol, quoteValue?.price || info.base || 100);
+      let candles = chartValue?.candles?.length ? chartValue.candles : candlesFromQuote(symbol, quoteSource);
+      if (quoteSource?.price && candles?.length) candles = alignCandlesToQuote(candles, quoteSource.price);
       const last = candles.at(-1);
       const quote = {
-        price: Number(quoteValue?.price || chartValue?.price || last?.close),
-        previousClose: Number(quoteValue?.previousClose || chartValue?.previousClose || candles.at(-2)?.close || last?.open),
-        open: Number(quoteValue?.open || last?.open),
-        high: Number(quoteValue?.high || last?.high),
-        low: Number(quoteValue?.low || last?.low),
-        volume: Number(quoteValue?.volume || last?.volume || chartValue?.volume || 0)
+        price: Number(quoteSource?.price || chartValue?.price || last?.close),
+        previousClose: Number(quoteSource?.previousClose || chartValue?.previousClose || candles.at(-2)?.close || last?.open),
+        open: Number(quoteSource?.open || last?.open),
+        high: Number(quoteSource?.high || last?.high),
+        low: Number(quoteSource?.low || last?.low),
+        volume: Number(quoteSource?.volume || last?.volume || chartValue?.volume || 0),
+        currency: "TWD"
       };
       quote.change = quote.price - quote.previousClose;
       quote.percent = quote.previousClose ? (quote.change / quote.previousClose) * 100 : 0;
       if (quote.price && last) {
+        last.open = Number.isFinite(quote.open) ? quote.open : last.open;
         last.close = quote.price;
-        last.high = Math.max(last.high, quote.price);
-        last.low = Math.min(last.low, quote.price);
+        last.high = Math.max(Number(quote.high) || last.high, quote.price, last.open);
+        last.low = Math.min(Number(quote.low) || last.low, quote.price, last.open);
+        last.volume = Number(quote.volume) || last.volume;
       }
-      const source = quoteValue?.price ? "TWSE MIS 即時校正 + Yahoo K線" : "Yahoo K線延遲資料";
+      const source = quoteValue?.price
+        ? "TWSE MIS 即時台幣價 + Yahoo K線"
+        : cachedQuote?.price
+          ? `台股台幣報價快取${quoteCacheMeta?.generatedAt ? " · " + formatCacheTime(quoteCacheMeta.generatedAt) : ""}`
+          : "Yahoo K線延遲資料";
       const item = { symbol, info, candles, quote, source, updatedAt: Date.now() };
       dataStore.set(symbol, item);
       return item;
     } catch (error) {
       console.warn("market data fallback", symbol, error);
-      const base = cached?.quote?.price || symbolInfo(symbol).base || 100;
-      const candles = fallbackCandles(symbol, base);
-      const last = candles.at(-1);
-      const prev = candles.at(-2) || last;
+      const quote = cachedQuote || cached?.quote || null;
+      if (!quote?.price) {
+        const item = {
+          symbol,
+          info,
+          candles: [],
+          quote: null,
+          source: "等待台幣即時報價，不顯示示範價格",
+          updatedAt: Date.now()
+        };
+        dataStore.set(symbol, item);
+        return item;
+      }
+      const candles = candlesFromQuote(symbol, quote);
       const item = {
         symbol,
         info,
         candles,
         quote: {
-          price: last.close,
-          previousClose: prev.close,
-          open: last.open,
-          high: last.high,
-          low: last.low,
-          volume: last.volume,
-          change: last.close - prev.close,
-          percent: ((last.close - prev.close) / prev.close) * 100
+          ...quote,
+          currency: "TWD",
+          change: Number.isFinite(Number(quote.change)) ? Number(quote.change) : quote.price - quote.previousClose,
+          percent: quote.previousClose ? ((quote.price - quote.previousClose) / quote.previousClose) * 100 : 0
         },
-        source: "離線示範資料，不是真實行情",
+        source: `台股台幣報價快取${quoteCacheMeta?.generatedAt ? " · " + formatCacheTime(quoteCacheMeta.generatedAt) : ""}`,
         updatedAt: Date.now()
       };
       dataStore.set(symbol, item);
@@ -1198,6 +1218,76 @@
     } catch (error) {
       console.warn("universe refresh failed", error);
     }
+  }
+
+  async function loadQuoteCache() {
+    const urls = [
+      "data/quotes.json",
+      "https://mlei83015.github.io/tiwn_stocks/data/quotes.json"
+    ];
+    for (const url of urls) {
+      try {
+        const bundle = await fetchJson(url.includes("?") ? url : `${url}?_=${Date.now()}`);
+        ingestQuoteBundle(bundle);
+        return bundle;
+      } catch (error) {
+        console.warn("quote cache unavailable", url, error);
+      }
+    }
+    return null;
+  }
+
+  function ingestQuoteBundle(bundle) {
+    if (!bundle?.quotes) return;
+    quoteCacheMeta = {
+      generatedAt: bundle.generatedAt,
+      source: bundle.source,
+      currency: bundle.currency || "TWD"
+    };
+    const merged = new Map(universe.map((item) => [item.symbol, item]));
+    Object.values(bundle.quotes).forEach((quote) => {
+      if (!quote?.symbol || !Number.isFinite(Number(quote.price))) return;
+      const normalized = normalizeCachedQuote(quote);
+      quoteCache.set(normalized.symbol, normalized);
+      merged.set(normalized.symbol, {
+        ...merged.get(normalized.symbol),
+        symbol: normalized.symbol,
+        name: normalized.name || merged.get(normalized.symbol)?.name || normalized.symbol,
+        exchange: normalized.exchange || merged.get(normalized.symbol)?.exchange || "TWSE",
+        market: normalized.market || merged.get(normalized.symbol)?.market || "上市",
+        sector: merged.get(normalized.symbol)?.sector || normalized.market || "台股",
+        base: normalized.price
+      });
+    });
+    universe = Array.from(merged.values()).sort((a, b) => a.symbol.localeCompare(b.symbol));
+  }
+
+  function normalizeCachedQuote(quote) {
+    const price = num(quote.price);
+    const previousClose = num(quote.previousClose) || num(quote.y) || price;
+    const change = Number.isFinite(num(quote.change)) ? num(quote.change) : price - previousClose;
+    return {
+      symbol: String(quote.symbol || quote.c || "").trim(),
+      name: quote.name || quote.n || "",
+      exchange: quote.exchange || "TWSE",
+      market: quote.market || (quote.exchange === "TPEX" ? "上櫃" : "上市"),
+      currency: "TWD",
+      price,
+      previousClose,
+      open: num(quote.open) || num(quote.o) || price,
+      high: num(quote.high) || num(quote.h) || price,
+      low: num(quote.low) || num(quote.l) || price,
+      volume: num(quote.volume) || num(quote.v) || 0,
+      change,
+      percent: previousClose ? (change / previousClose) * 100 : 0,
+      date: quote.date || quote.d || "",
+      time: quote.time || quote.t || "",
+      source: quote.source || "台股台幣報價快取"
+    };
+  }
+
+  function cachedQuoteFor(symbol) {
+    return quoteCache.get(String(symbol));
   }
 
   async function fetchTwseUniverse() {
@@ -1479,7 +1569,7 @@
   function compactQuoteRow(symbol) {
     const data = dataStore.get(symbol);
     if (!data) loadMarketData(symbol);
-    const quote = data?.quote;
+    const quote = data?.quote || cachedQuoteFor(symbol);
     return `
       <button class="quote-row" data-symbol="${symbol}" type="button">
         <span>
@@ -1497,7 +1587,7 @@
     const data = dataStore.get(symbol);
     if (!data) loadMarketData(symbol);
     const info = symbolInfo(symbol);
-    const quote = data?.quote;
+    const quote = data?.quote || cachedQuoteFor(symbol);
     const ai = buildAI(data);
     return `
       <article class="watch-card" data-symbol="${symbol}">
@@ -1777,10 +1867,39 @@
     return { macd, signal, hist };
   }
 
+  function candlesFromQuote(symbol, quote) {
+    if (!quote?.price) return [];
+    const base = quote.previousClose || quote.price;
+    const candles = fallbackCandles(symbol, base);
+    const last = candles.at(-1);
+    if (!last) return [];
+    last.open = roundPrice(quote.open || quote.price);
+    last.high = roundPrice(Math.max(quote.high || quote.price, quote.price, last.open));
+    last.low = roundPrice(Math.min(quote.low || quote.price, quote.price, last.open));
+    last.close = roundPrice(quote.price);
+    last.volume = Number(quote.volume) || last.volume || 0;
+    return candles;
+  }
+
+  function alignCandlesToQuote(candles, price) {
+    const last = candles.at(-1);
+    if (!last?.close || !price) return candles;
+    const ratio = price / last.close;
+    if (ratio > 0.33 && ratio < 3) return candles;
+    return candles.map((candle) => ({
+      ...candle,
+      open: roundPrice(candle.open * ratio),
+      high: roundPrice(candle.high * ratio),
+      low: roundPrice(candle.low * ratio),
+      close: roundPrice(candle.close * ratio)
+    }));
+  }
+
   function fallbackCandles(symbol, base) {
     const now = Date.now();
     const candles = [];
-    let price = Number(base) || 100;
+    let price = Number(base);
+    if (!Number.isFinite(price) || price <= 0) return candles;
     let seed = Number(symbol.replace(/\D/g, "")) || 2330;
     const interval = state.timeframe === "D" ? 86_400_000 : state.timeframe === "60m" ? 3_600_000 : state.timeframe === "5m" ? 300_000 : 900_000;
     const count = state.timeframe === "D" ? 260 : 620;
@@ -1812,13 +1931,21 @@
   }
 
   function symbolInfo(symbol) {
-    return universe.find((item) => item.symbol === symbol) || {
+    const cached = cachedQuoteFor(symbol);
+    return universe.find((item) => item.symbol === symbol) || (cached ? {
+      symbol,
+      name: cached.name || "台股",
+      exchange: cached.exchange || "TWSE",
+      market: cached.market || "台股",
+      sector: cached.market || "台股",
+      base: cached.price
+    } : {
       symbol,
       name: "台股",
       exchange: "TWSE",
       market: "台股",
       sector: "自訂"
-    };
+    });
   }
 
   function symbolLabel(symbol) {
@@ -1878,6 +2005,18 @@
     if (sec < 60) return `${sec} 秒前`;
     const min = Math.floor(sec / 60);
     return `${min} 分前`;
+  }
+
+  function formatCacheTime(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "快取";
+    return date.toLocaleString("zh-TW", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "Asia/Taipei"
+    });
   }
 
   function roundPrice(value) {
